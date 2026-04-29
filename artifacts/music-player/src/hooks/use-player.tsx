@@ -111,7 +111,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   
   // We need to make handleTrackEnd accessible to the audio ended listener
   // Since it depends on state, we use a ref to the latest function
-  const handleTrackEndRef = useRef<() => void>();
+  const handleTrackEndRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (audioRef.current) {

@@ -8,10 +8,7 @@ import {
   Moon,
   Sun,
   Download,
-  CheckSquare,
-  Square,
-  X,
-  CheckCheck,
+  Package,
   Sparkles,
   ListPlus,
 } from "lucide-react";
@@ -28,11 +25,11 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   searchTracks,
   searchAllSources,
   downloadTrack,
+  downloadTracksAsZip,
   type Track,
   type SourceOrAll,
 } from "@/lib/api";
@@ -112,9 +109,6 @@ function ResultRow({
   index,
   onPlay,
   onDownload,
-  onToggleSelect,
-  selectMode,
-  selected,
   isCurrent,
   isPlaying,
   downloading,
@@ -123,9 +117,6 @@ function ResultRow({
   index: number;
   onPlay: () => void;
   onDownload: () => void;
-  onToggleSelect: () => void;
-  selectMode: boolean;
-  selected: boolean;
   isCurrent: boolean;
   isPlaying: boolean;
   downloading: boolean;
@@ -140,45 +131,31 @@ function ResultRow({
         "group w-full flex items-center gap-3 px-3 py-3.5 rounded-lg transition-colors",
         "hover:bg-foreground/[0.04] dark:hover:bg-white/[0.04]",
         isCurrent && "bg-primary/[0.08]",
-        selected && "bg-primary/[0.10] hover:bg-primary/[0.14]",
       )}
     >
-      {selectMode ? (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={onToggleSelect}
-          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onToggleSelect()}
-          className="w-9 flex items-center justify-center shrink-0 cursor-pointer"
-          aria-label={selected ? "取消选中" : "选中"}
-        >
-          <Checkbox checked={selected} className="pointer-events-none" />
-        </div>
-      ) : (
-        <button
-          onClick={onPlay}
-          className="w-9 flex items-center justify-center text-sm font-mono text-muted-foreground shrink-0"
-        >
-          {isCurrent && isPlaying ? (
-            <div className="flex items-end gap-[2px] h-4">
-              <span className="w-[3px] bg-primary rounded-full animate-eq-1" />
-              <span className="w-[3px] bg-primary rounded-full animate-eq-2" />
-              <span className="w-[3px] bg-primary rounded-full animate-eq-3" />
-            </div>
-          ) : (
-            <>
-              <span className="group-hover:hidden tabular-nums">{(index + 1).toString().padStart(2, "0")}</span>
-              <span className="hidden group-hover:inline-block">
-                <svg viewBox="0 0 24 24" className="w-4 h-4 fill-foreground">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </span>
-            </>
-          )}
-        </button>
-      )}
+      <button
+        onClick={onPlay}
+        className="w-9 flex items-center justify-center text-sm font-mono text-muted-foreground shrink-0"
+      >
+        {isCurrent && isPlaying ? (
+          <div className="flex items-end gap-[2px] h-4">
+            <span className="w-[3px] bg-primary rounded-full animate-eq-1" />
+            <span className="w-[3px] bg-primary rounded-full animate-eq-2" />
+            <span className="w-[3px] bg-primary rounded-full animate-eq-3" />
+          </div>
+        ) : (
+          <>
+            <span className="group-hover:hidden tabular-nums">{(index + 1).toString().padStart(2, "0")}</span>
+            <span className="hidden group-hover:inline-block">
+              <svg viewBox="0 0 24 24" className="w-4 h-4 fill-foreground">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </span>
+          </>
+        )}
+      </button>
 
-      <button onClick={selectMode ? onToggleSelect : onPlay} className="flex-1 min-w-0 text-left">
+      <button onClick={onPlay} className="flex-1 min-w-0 text-left">
         <div className="flex items-center gap-2 min-w-0">
           <span className={cn("truncate font-semibold text-[15px]", isCurrent && "text-primary")}>
             {track.name}
@@ -255,10 +232,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
 
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [downloadingKeys, setDownloadingKeys] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
   const debounced = useDebounce(query, 450);
   const { playTrack, currentTrack, isPlaying, recentTracks } = usePlayer();
@@ -299,8 +275,6 @@ export default function Home() {
       });
   }, [debounced, source]);
 
-  useEffect(() => setSelectedKeys(new Set()), [results]);
-
   const handlePlay = (track: Track) => {
     playTrack(track, results.length > 0 ? results : [track]);
   };
@@ -328,68 +302,39 @@ export default function Home() {
     }
   };
 
-  const toggleSelect = (track: Track) => {
-    const k = trackKey(track);
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
-      return next;
-    });
-  };
-
-  const selectAll = () => setSelectedKeys(new Set(results.map(trackKey)));
-  const clearSelection = () => setSelectedKeys(new Set());
-  const exitSelectMode = () => {
-    setSelectMode(false);
-    clearSelection();
-  };
-
-  const handleBulkDownload = async () => {
-    const targets = results.filter((t) => selectedKeys.has(trackKey(t)));
-    if (targets.length === 0) {
-      toast.message("还没选中歌曲");
-      return;
-    }
+  const handleDownloadAll = async () => {
+    if (results.length === 0 || bulkBusy) return;
+    const targets = results;
     setBulkBusy(true);
-    let ok = 0;
-    let fallback = 0;
-    let fail = 0;
-    const id = toast.loading(`准备下载 ${targets.length} 首...`);
+    setBulkProgress({ done: 0, total: targets.length });
+    const id = toast.loading(`准备打包 ${targets.length} 首...`);
 
-    for (let i = 0; i < targets.length; i++) {
-      const t = targets[i];
-      const k = trackKey(t);
-      setDownloadingKeys((prev) => new Set(prev).add(k));
-      toast.loading(`下载中 ${i + 1}/${targets.length} · ${t.name}`, { id });
-      try {
-        const real = await downloadTrack(t);
-        if (real) ok++;
-        else fallback++;
-      } catch (e) {
-        console.error(e);
-        fail++;
-      } finally {
-        setDownloadingKeys((prev) => {
-          const next = new Set(prev);
-          next.delete(k);
-          return next;
-        });
+    const zipName = `echo-${query.trim() || "songs"}-${targets.length}首`;
+
+    try {
+      const { ok, failed } = await downloadTracksAsZip(
+        targets,
+        zipName,
+        (done, total, name) => {
+          setBulkProgress({ done, total });
+          toast.loading(`打包中 ${done}/${total} · ${name}`, { id });
+        },
+      );
+
+      if (ok === 0) {
+        toast.error("全部下载失败,稍后再试", { id });
+      } else if (failed.length === 0) {
+        toast.success(`已打包 ${ok} 首并开始下载`, { id });
+      } else {
+        toast.success(`已打包 ${ok} 首,${failed.length} 首获取失败`, { id });
       }
-      await new Promise((r) => setTimeout(r, 350));
+    } catch (e) {
+      console.error(e);
+      toast.error("打包失败,稍后再试", { id });
+    } finally {
+      setBulkBusy(false);
+      setBulkProgress(null);
     }
-
-    const summary = [
-      ok ? `已下载 ${ok}` : "",
-      fallback ? `${fallback} 首在新标签页打开` : "",
-      fail ? `${fail} 首失败` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-
-    if (fail > 0 && ok === 0 && fallback === 0) toast.error("批量下载失败", { id });
-    else toast.success(summary || "完成", { id });
-    setBulkBusy(false);
   };
 
   const headerArtist = useMemo(
@@ -401,8 +346,6 @@ export default function Home() {
         : "",
     [currentTrack],
   );
-
-  const allSelected = results.length > 0 && selectedKeys.size === results.length;
 
   return (
     <div className="relative flex-1 flex flex-col overflow-hidden">
@@ -568,9 +511,6 @@ export default function Home() {
                           index={i}
                           onPlay={() => playTrack(t, recentTracks)}
                           onDownload={() => handleSingleDownload(t)}
-                          onToggleSelect={() => {}}
-                          selectMode={false}
-                          selected={false}
                           isCurrent={!!currentTrack && trackKey(currentTrack) === trackKey(t)}
                           isPlaying={isPlaying}
                           downloading={downloadingKeys.has(trackKey(t))}
@@ -591,40 +531,26 @@ export default function Home() {
                   <h2 className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-bold">
                     {results.length} 首结果
                   </h2>
-                  <div className="flex items-center gap-1">
-                    {selectMode ? (
+                  <Button
+                    size="sm"
+                    onClick={handleDownloadAll}
+                    disabled={bulkBusy || results.length === 0}
+                    className="h-8 px-3 text-xs gap-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                  >
+                    {bulkBusy ? (
                       <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={allSelected ? clearSelection : selectAll}
-                          className="h-7 px-2 text-xs gap-1.5"
-                        >
-                          {allSelected ? <Square className="w-3.5 h-3.5" /> : <CheckSquare className="w-3.5 h-3.5" />}
-                          {allSelected ? "全不选" : "全选"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={exitSelectMode}
-                          className="h-7 px-2 text-xs gap-1.5"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          退出
-                        </Button>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        {bulkProgress
+                          ? `打包中 ${bulkProgress.done}/${bulkProgress.total}`
+                          : "打包中"}
                       </>
                     ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setSelectMode(true)}
-                        className="h-7 px-2 text-xs gap-1.5"
-                      >
-                        <CheckCheck className="w-3.5 h-3.5" />
-                        多选下载
-                      </Button>
+                      <>
+                        <Package className="w-3.5 h-3.5" />
+                        一键下载全部 ({results.length})
+                      </>
                     )}
-                  </div>
+                  </Button>
                 </div>
                 {results.map((t, i) => (
                   <ResultRow
@@ -633,9 +559,6 @@ export default function Home() {
                     index={i}
                     onPlay={() => handlePlay(t)}
                     onDownload={() => handleSingleDownload(t)}
-                    onToggleSelect={() => toggleSelect(t)}
-                    selectMode={selectMode}
-                    selected={selectedKeys.has(trackKey(t))}
                     isCurrent={!!currentTrack && trackKey(currentTrack) === trackKey(t)}
                     isPlaying={isPlaying}
                     downloading={downloadingKeys.has(trackKey(t))}
@@ -646,33 +569,6 @@ export default function Home() {
           </AnimatePresence>
         </div>
       </ScrollArea>
-
-      <AnimatePresence>
-        {selectMode && results.length > 0 && (
-          <motion.div
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            transition={{ type: "spring", damping: 24, stiffness: 280 }}
-            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40"
-          >
-            <div className="flex items-center gap-3 px-4 py-2.5 rounded-full bg-card/95 backdrop-blur-xl border border-border shadow-xl shadow-black/10">
-              <span className="text-sm font-medium px-2">
-                已选 <span className="text-primary font-bold">{selectedKeys.size}</span> 首
-              </span>
-              <Button
-                size="sm"
-                onClick={handleBulkDownload}
-                disabled={selectedKeys.size === 0 || bulkBusy}
-                className="rounded-full gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                {bulkBusy ? "下载中" : "下载选中"}
-              </Button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

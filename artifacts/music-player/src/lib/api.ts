@@ -229,6 +229,98 @@ export const downloadTrack = async (
   }
 };
 
+/**
+ * Download many tracks bundled into a single ZIP file. Uses one browser
+ * download trigger so it never asks the user for "allow multiple downloads"
+ * permission. Returns counts so the UI can summarize the result.
+ *
+ * `onProgress(done, total, currentName)` fires once per track (success or fail).
+ */
+export const downloadTracksAsZip = async (
+  tracks: Track[],
+  zipName: string,
+  onProgress?: (done: number, total: number, currentName: string) => void,
+  br: 128 | 192 | 320 | 740 | 999 = 320,
+  concurrency = 4,
+): Promise<{ ok: number; failed: { track: Track; reason: string }[] }> => {
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip();
+
+  let done = 0;
+  let ok = 0;
+  const failed: { track: Track; reason: string }[] = [];
+  const usedNames = new Set<string>();
+
+  const reserveName = (base: string, ext: string): string => {
+    let candidate = `${base}.${ext}`;
+    let i = 2;
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${base} (${i}).${ext}`;
+      i++;
+    }
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  };
+
+  const fetchOne = async (track: Track) => {
+    try {
+      const { url } = await getTrackUrl(track.id, track.source, br);
+      if (!url) throw new Error("无可用音频地址");
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = await res.arrayBuffer();
+      const artist = Array.isArray(track.artist)
+        ? track.artist.join(", ")
+        : String(track.artist ?? "");
+      const ext = inferExt(url);
+      const base = sanitizeFilename(`${artist} - ${track.name}`);
+      const filename = reserveName(base || `track-${track.id}`, ext);
+      zip.file(filename, buf);
+      ok++;
+    } catch (e) {
+      failed.push({
+        track,
+        reason: e instanceof Error ? e.message : "下载失败",
+      });
+    } finally {
+      done++;
+      onProgress?.(done, tracks.length, track.name);
+    }
+  };
+
+  // Run with a small concurrency window so we hit the upstream rate limit gracefully.
+  const queue = [...tracks];
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < Math.min(concurrency, queue.length); i++) {
+    workers.push(
+      (async () => {
+        while (queue.length > 0) {
+          const next = queue.shift();
+          if (!next) break;
+          await fetchOne(next);
+        }
+      })(),
+    );
+  }
+  await Promise.all(workers);
+
+  if (ok === 0) {
+    return { ok, failed };
+  }
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = sanitizeFilename(zipName) + ".zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+  return { ok, failed };
+};
+
 /* -------------------------- Playlist Import -------------------------- */
 
 export interface PlaylistEntry {
