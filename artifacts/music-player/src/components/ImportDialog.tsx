@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Loader2, Download, ListMusic, Link2, FileText, Play } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Package, ListMusic, Link2, FileText, Play } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,15 +16,14 @@ import {
   fetchNeteasePlaylist,
   parseTextPlaylist,
   resolvePlaylistEntries,
-  downloadTrack,
+  downloadTracksAsZip,
   type Track,
   type PlaylistEntry,
 } from "@/lib/api";
 import { usePlayer } from "@/hooks/use-player";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
-type Phase = "input" | "resolving" | "ready";
+type Phase = "input" | "resolving" | "ready" | "zipping";
 
 export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -34,30 +33,31 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
 
   const [phase, setPhase] = useState<Phase>("input");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [zipProgress, setZipProgress] = useState({ done: 0, total: 0, name: "" });
   const [tracks, setTracks] = useState<Track[]>([]);
   const [missed, setMissed] = useState<PlaylistEntry[]>([]);
-  const [downloading, setDownloading] = useState(false);
+  const [zipName, setZipName] = useState("echo-playlist");
 
   const { playTrack } = usePlayer();
 
   const reset = () => {
     setPhase("input");
     setProgress({ done: 0, total: 0 });
+    setZipProgress({ done: 0, total: 0, name: "" });
     setTracks([]);
     setMissed([]);
-    setDownloading(false);
   };
 
   const handleOpenChange = (v: boolean) => {
     setOpen(v);
     if (!v) {
-      // Reset shortly after closing so the flash isn't visible
       setTimeout(reset, 200);
     }
   };
 
   const startImport = async () => {
     let entries: PlaylistEntry[] = [];
+    let name = "echo-playlist";
     try {
       if (tab === "netease") {
         if (!neteaseInput.trim()) {
@@ -67,6 +67,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
         setPhase("resolving");
         toast.loading("正在拉取歌单...", { id: "import" });
         entries = await fetchNeteasePlaylist(neteaseInput);
+        name = `echo-netease-${neteaseInput.trim().replace(/\D+/g, "").slice(0, 10)}`;
         toast.success(`找到 ${entries.length} 首,开始匹配音源...`, { id: "import" });
       } else {
         const parsed = parseTextPlaylist(listInput);
@@ -75,6 +76,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
           return;
         }
         entries = parsed;
+        name = "echo-playlist";
         setPhase("resolving");
         toast.loading(`匹配 ${entries.length} 首歌...`, { id: "import" });
       }
@@ -85,6 +87,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
       return;
     }
 
+    setZipName(name);
     setProgress({ done: 0, total: entries.length });
     const { tracks: resolved, missed } = await resolvePlaylistEntries(
       entries,
@@ -92,41 +95,68 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
     );
     setTracks(resolved);
     setMissed(missed);
-    setPhase("ready");
     toast.success(
-      `匹配到 ${resolved.length} 首${missed.length ? ` · ${missed.length} 首没找到` : ""}`,
+      `匹配到 ${resolved.length} 首${missed.length ? ` · ${missed.length} 首没找到` : ""},开始打包...`,
       { id: "import" },
     );
+
+    // Auto-start ZIP download immediately after matching
+    if (resolved.length > 0) {
+      setPhase("zipping");
+      setZipProgress({ done: 0, total: resolved.length, name: "" });
+      try {
+        const { ok, failed } = await downloadTracksAsZip(
+          resolved,
+          name,
+          (done, total, currentName) => {
+            setZipProgress({ done, total, name: currentName });
+          },
+        );
+        if (ok === 0) {
+          toast.error("全部曲目获取失败,稍后再试", { id: "import" });
+        } else if (failed.length === 0) {
+          toast.success(`已打包 ${ok} 首并开始下载 ZIP`, { id: "import" });
+        } else {
+          toast.success(`已打包 ${ok} 首,${failed.length} 首获取失败`, { id: "import" });
+        }
+      } catch (e) {
+        console.error(e);
+        toast.error("打包失败,稍后再试", { id: "import" });
+      }
+      setPhase("ready");
+    } else {
+      setPhase("ready");
+      toast.error("没有匹配到任何歌曲", { id: "import" });
+    }
   };
 
-  const handleDownloadAll = async () => {
+  const handleDownloadZip = async () => {
     if (tracks.length === 0) return;
-    setDownloading(true);
-    let ok = 0;
-    let fb = 0;
-    let fail = 0;
-    const id = toast.loading(`准备下载 ${tracks.length} 首...`);
-    for (let i = 0; i < tracks.length; i++) {
-      const t = tracks[i];
-      toast.loading(`下载中 ${i + 1}/${tracks.length} · ${t.name}`, { id });
-      try {
-        const real = await downloadTrack(t);
-        if (real) ok++;
-        else fb++;
-      } catch (e) {
-        fail++;
+    setPhase("zipping");
+    setZipProgress({ done: 0, total: tracks.length, name: "" });
+    const id = toast.loading(`准备打包 ${tracks.length} 首...`);
+    try {
+      const { ok, failed } = await downloadTracksAsZip(
+        tracks,
+        zipName,
+        (done, total, name) => {
+          setZipProgress({ done, total, name });
+          toast.loading(`打包中 ${done}/${total} · ${name}`, { id });
+        },
+      );
+      if (ok === 0) {
+        toast.error("全部下载失败,稍后再试", { id });
+      } else if (failed.length === 0) {
+        toast.success(`已打包 ${ok} 首并开始下载`, { id });
+      } else {
+        toast.success(`已打包 ${ok} 首,${failed.length} 首获取失败`, { id });
       }
-      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      console.error(e);
+      toast.error("打包失败,稍后再试", { id });
+    } finally {
+      setPhase("ready");
     }
-    const msg = [
-      ok ? `已下载 ${ok}` : "",
-      fb ? `${fb} 首在新标签打开` : "",
-      fail ? `${fail} 首失败` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    toast.success(msg || "完成", { id });
-    setDownloading(false);
   };
 
   const handlePlayAll = () => {
@@ -145,7 +175,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
             导入外部歌单
           </DialogTitle>
           <DialogDescription>
-            支持网易云歌单链接,或直接粘贴歌曲列表。匹配完成后可一键播放或批量下载。
+            支持网易云歌单链接,或直接粘贴歌曲列表。匹配完成后自动打包下载一个 ZIP 文件。
           </DialogDescription>
         </DialogHeader>
 
@@ -203,31 +233,50 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
               </Button>
               <Button onClick={startImport} className="gap-2">
                 <ListMusic className="w-4 h-4" />
-                开始导入
+                开始导入并下载
               </Button>
             </div>
           </Tabs>
         )}
 
-        {phase === "resolving" && (
-          <div className="py-12 flex flex-col items-center gap-4">
-            <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <div className="text-center">
-              <p className="text-sm font-medium">
-                正在匹配音源 {progress.done}/{progress.total}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                每首歌大约 0.3 秒,API 限流期间请耐心等待
-              </p>
+        {(phase === "resolving" || phase === "zipping") && (
+          <div className="py-10 flex flex-col items-center gap-5">
+            <Loader2 className="w-9 h-9 animate-spin text-primary" />
+            <div className="text-center space-y-1">
+              {phase === "resolving" ? (
+                <>
+                  <p className="text-sm font-medium">
+                    正在匹配音源 {progress.done}/{progress.total}
+                  </p>
+                  <p className="text-xs text-muted-foreground">每首歌大约 0.3 秒,请耐心等待</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium">
+                    正在打包 {zipProgress.done}/{zipProgress.total}
+                  </p>
+                  {zipProgress.name && (
+                    <p className="text-xs text-muted-foreground truncate max-w-[320px]">
+                      {zipProgress.name}
+                    </p>
+                  )}
+                </>
+              )}
             </div>
-            {progress.total > 0 && (
-              <div className="w-full max-w-xs h-1.5 bg-muted rounded-full overflow-hidden">
+            <div className="w-full max-w-xs h-1.5 bg-muted rounded-full overflow-hidden">
+              {phase === "resolving" && progress.total > 0 && (
                 <div
                   className="h-full bg-primary transition-all duration-300"
                   style={{ width: `${(progress.done / progress.total) * 100}%` }}
                 />
-              </div>
-            )}
+              )}
+              {phase === "zipping" && zipProgress.total > 0 && (
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${(zipProgress.done / zipProgress.total) * 100}%` }}
+                />
+              )}
+            </div>
           </div>
         )}
 
@@ -246,7 +295,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
               )}
             </div>
 
-            <div className="max-h-[240px] overflow-y-auto space-y-1 pr-1">
+            <div className="max-h-[220px] overflow-y-auto space-y-1 pr-1">
               {tracks.slice(0, 50).map((t, i) => (
                 <div
                   key={`${t.source}-${t.id}-${i}`}
@@ -258,7 +307,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
                   <div className="flex-1 min-w-0">
                     <div className="truncate font-medium">{t.name}</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {t.artist.join(", ")}
+                      {Array.isArray(t.artist) ? t.artist.join(", ") : t.artist}
                     </div>
                   </div>
                 </div>
@@ -298,16 +347,12 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
                   全部播放
                 </Button>
                 <Button
-                  onClick={handleDownloadAll}
-                  disabled={tracks.length === 0 || downloading}
-                  className={cn("gap-2", downloading && "opacity-70")}
+                  onClick={handleDownloadZip}
+                  disabled={tracks.length === 0}
+                  className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
                 >
-                  {downloading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  {downloading ? "下载中" : "下载全部"}
+                  <Package className="w-4 h-4" />
+                  重新打包下载
                 </Button>
               </div>
             </div>

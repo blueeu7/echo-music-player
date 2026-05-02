@@ -262,13 +262,25 @@ export const downloadTracksAsZip = async (
     return candidate;
   };
 
+  const fetchAudioBuf = async (audioUrl: string): Promise<ArrayBuffer> => {
+    // Try direct CORS fetch first; fall back to our server-side proxy.
+    try {
+      const res = await fetch(audioUrl, { mode: "cors" });
+      if (res.ok) return res.arrayBuffer();
+    } catch {
+      // CORS blocked — fall through to proxy
+    }
+    const proxyUrl = `/api/proxy/audio?url=${encodeURIComponent(audioUrl)}`;
+    const res = await fetch(proxyUrl);
+    if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
+    return res.arrayBuffer();
+  };
+
   const fetchOne = async (track: Track) => {
     try {
       const { url } = await getTrackUrl(track.id, track.source, br);
       if (!url) throw new Error("无可用音频地址");
-      const res = await fetch(url, { mode: "cors" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = await res.arrayBuffer();
+      const buf = await fetchAudioBuf(url);
       const artist = Array.isArray(track.artist)
         ? track.artist.join(", ")
         : String(track.artist ?? "");
