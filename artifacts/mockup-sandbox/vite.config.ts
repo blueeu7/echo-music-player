@@ -5,22 +5,15 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { mockupPreviewPlugin } from "./mockupPreviewPlugin";
 
+// 自动适配 PORT，如果没有设置就使用5173
 const rawPort = process.env.PORT;
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
-const port = Number(rawPort);
-
+const port = rawPort ? Number(rawPort) : 5173;
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+// BASE_PATH 依然是必须的（如确实需要否则可同理兼容）
 const basePath = process.env.BASE_PATH;
-
 if (!basePath) {
   throw new Error(
     "BASE_PATH environment variable is required but was not provided.",
