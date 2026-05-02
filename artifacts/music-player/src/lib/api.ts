@@ -19,8 +19,16 @@ export const ALL_SOURCES: Source[] = [
   "kugou",
 ];
 
-// Stable sources per upstream docs — used for "all" search to be friendly to rate limit.
-export const STABLE_SOURCES: Source[] = ["netease", "kuwo", "joox", "bilibili"];
+// All 7 sources used for "all" search — failed sources are silently skipped.
+export const STABLE_SOURCES: Source[] = [
+  "netease",
+  "kuwo",
+  "joox",
+  "bilibili",
+  "tencent",
+  "migu",
+  "kugou",
+];
 
 export interface Track {
   id: string | number;

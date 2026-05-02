@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2, Package, ListMusic, Link2, FileText, Play } from "lucide-react";
 import {
   Dialog,
@@ -23,9 +23,17 @@ import {
 import { usePlayer } from "@/hooks/use-player";
 import { toast } from "sonner";
 
+type Bitrate = 128 | 192 | 320 | 740 | 999;
+
 type Phase = "input" | "resolving" | "ready" | "zipping";
 
-export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
+export function ImportDialog({
+  trigger,
+  br = 320,
+}: {
+  trigger: React.ReactNode;
+  br?: Bitrate;
+}) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"netease" | "list">("netease");
   const [neteaseInput, setNeteaseInput] = useState("");
@@ -111,6 +119,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
           (done, total, currentName) => {
             setZipProgress({ done, total, name: currentName });
           },
+          br,
         );
         if (ok === 0) {
           toast.error("全部曲目获取失败,稍后再试", { id: "import" });
@@ -143,6 +152,7 @@ export function ImportDialog({ trigger }: { trigger: React.ReactNode }) {
           setZipProgress({ done, total, name });
           toast.loading(`打包中 ${done}/${total} · ${name}`, { id });
         },
+        br,
       );
       if (ok === 0) {
         toast.error("全部下载失败,稍后再试", { id });

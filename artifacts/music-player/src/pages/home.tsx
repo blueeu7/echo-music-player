@@ -38,6 +38,15 @@ import { usePlayer } from "@/hooks/use-player";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
+type Bitrate = 128 | 192 | 320 | 740 | 999;
+
+const BITRATE_OPTIONS: { value: Bitrate; label: string; sublabel: string }[] = [
+  { value: 128, label: "标准", sublabel: "128 kbps" },
+  { value: 320, label: "高品质", sublabel: "320 kbps" },
+  { value: 740, label: "无损", sublabel: "FLAC ~740k" },
+  { value: 999, label: "Hi-Res", sublabel: "最高音质" },
+];
+
 type Tile = { label: string; query: string; gradient: string };
 
 const TILES: Tile[] = [
@@ -235,6 +244,7 @@ export default function Home() {
   const [downloadingKeys, setDownloadingKeys] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [br, setBr] = useState<Bitrate>(320);
 
   const debounced = useDebounce(query, 450);
   const { playTrack, currentTrack, isPlaying, recentTracks } = usePlayer();
@@ -284,7 +294,7 @@ export default function Home() {
     if (downloadingKeys.has(k)) return;
     setDownloadingKeys((prev) => new Set(prev).add(k));
     try {
-      const realDownload = await downloadTrack(track);
+      const realDownload = await downloadTrack(track, br);
       if (realDownload) toast.success(`已下载: ${track.name}`);
       else
         toast.message("已在新标签页打开", {
@@ -319,6 +329,7 @@ export default function Home() {
           setBulkProgress({ done, total });
           toast.loading(`打包中 ${done}/${total} · ${name}`, { id });
         },
+        br,
       );
 
       if (ok === 0) {
@@ -371,6 +382,7 @@ export default function Home() {
             </div>
           )}
           <ImportDialog
+            br={br}
             trigger={
               <Button
                 variant="outline"
@@ -383,6 +395,7 @@ export default function Home() {
             }
           />
           <ImportDialog
+            br={br}
             trigger={
               <Button
                 variant="outline"
@@ -527,30 +540,49 @@ export default function Home() {
                 animate={{ opacity: 1 }}
                 className="space-y-0.5 max-w-3xl mx-auto"
               >
-                <div className="flex items-center justify-between px-3 mb-2 mt-2">
-                  <h2 className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-bold">
+                <div className="flex items-center justify-between px-3 mb-2 mt-2 gap-2 flex-wrap">
+                  <h2 className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-bold shrink-0">
                     {results.length} 首结果
                   </h2>
-                  <Button
-                    size="sm"
-                    onClick={handleDownloadAll}
-                    disabled={bulkBusy || results.length === 0}
-                    className="h-8 px-3 text-xs gap-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
-                  >
-                    {bulkBusy ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        {bulkProgress
-                          ? `打包中 ${bulkProgress.done}/${bulkProgress.total}`
-                          : "打包中"}
-                      </>
-                    ) : (
-                      <>
-                        <Package className="w-3.5 h-3.5" />
-                        一键下载全部 ({results.length})
-                      </>
-                    )}
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center rounded-full border border-border overflow-hidden h-8">
+                      {BITRATE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => setBr(opt.value)}
+                          title={opt.sublabel}
+                          className={cn(
+                            "px-2.5 h-full text-xs font-medium transition-colors",
+                            br === opt.value
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={handleDownloadAll}
+                      disabled={bulkBusy || results.length === 0}
+                      className="h-8 px-3 text-xs gap-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                    >
+                      {bulkBusy ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          {bulkProgress
+                            ? `打包中 ${bulkProgress.done}/${bulkProgress.total}`
+                            : "打包中"}
+                        </>
+                      ) : (
+                        <>
+                          <Package className="w-3.5 h-3.5" />
+                          下载全部 ({results.length})
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 {results.map((t, i) => (
                   <ResultRow
